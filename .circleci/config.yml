@@ -31,14 +31,6 @@ jobs:
           paths:
             - ~/.stack
             - ./.stack-work
-
-  stack_test:
-    docker:
-      - image: fpco/stack-build:lts
-    steps:
-      - restore_cache:
-          keys:
-            - stack-{{ checksum "stack.yaml" }}
       - run:
           name: Test
           command: |
@@ -68,20 +60,13 @@ jobs:
       - run:
           name: Dependencies
           command: |
+            cabal new-update
             cabal new-build all
       - save_cache:
           key: cabal-{{ checksum "liquidhaskell.cabal" }}
           paths:
             - ~/.cabal/store
             - ./dist-newstyle
-
-  cabal_test:
-    docker:
-      - image: haskell:8.6.5
-    steps:
-      - restore_cache:
-          keys:
-            - cabal-{{ checksum "liquidhaskell.cabal" }}
       - run:
           name: Test
           command: |
@@ -101,10 +86,3 @@ workflows:
     jobs:
       - stack_build
       - cabal_build
-      - stack_test:
-          requires:
-              - stack_build
-      - cabal_test:
-          requires:
-              - cabal_build
-              - stack_test
