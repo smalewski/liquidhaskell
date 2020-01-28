@@ -1,7 +1,6 @@
 Name:                liquidhaskell
 Version:             0.8.2.0
 Copyright:           2010-17 Ranjit Jhala & Niki Vazou, University of California, San Diego.
-build-type:          Simple
 Synopsis:            Liquid Types for Haskell
 Description:         Liquid Types for Haskell.
 Homepage:            https://github.com/ucsd-progsys/liquidhaskell
@@ -156,6 +155,7 @@ Library
                     Language.Haskell.Liquid.Foreign,
                     Language.Haskell.Liquid.List,
                     Language.Haskell.Liquid.Bare,
+                    Language.Haskell.Liquid.Casting,
                     Language.Haskell.Liquid.Constraint.Constraint,
                     Language.Haskell.Liquid.Constraint.Init,
                     Language.Haskell.Liquid.Constraint.Monad,

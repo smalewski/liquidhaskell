@@ -1,7 +1,7 @@
 {-# LANGUAGE NamedFieldPuns      #-}
 {-# LANGUAGE TupleSections       #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-
+{-# LANGUAGE FlexibleContexts #-}
 {-@ LIQUID "--diff"     @-}
 
 module Language.Haskell.Liquid.Liquid (
@@ -18,13 +18,14 @@ module Language.Haskell.Liquid.Liquid (
   , liquidConstraints
   ) where
 
-import           Prelude hiding (error)
+import           Data.List (zipWith5)
 import           Data.Bifunctor
+import           Prelude hiding (error)
 import           System.Exit
 import           Text.PrettyPrint.HughesPJ
 -- import           Var                              (Var)
 import           CoreSyn
-import           HscTypes                         (SourceError)
+import           HscTypes (SourceError)
 import           GHC (HscEnv)
 import           System.Console.CmdArgs.Verbosity (whenLoud, whenNormal)
 import           Control.Monad (when)
@@ -34,9 +35,10 @@ import qualified Language.Haskell.Liquid.UX.DiffCheck as DC
 import           Language.Haskell.Liquid.Misc
 import           Language.Fixpoint.Misc
 import           Language.Fixpoint.Solver
+-- import           Language.Fixpoint.Solver.GradualSolve (solveGradual)
 import qualified Language.Fixpoint.Types as F
-import           Language.Haskell.Liquid.Types
-import           Language.Haskell.Liquid.Types.RefType (applySolution)
+import           Language.Haskell.Liquid.Types hiding (binds)
+import           Language.Haskell.Liquid.Types.RefType (applySolution, applySolutionIgnoringG)
 import           Language.Haskell.Liquid.UX.Errors
 import           Language.Haskell.Liquid.UX.CmdLine
 import           Language.Haskell.Liquid.UX.Tidy
@@ -45,9 +47,11 @@ import           Language.Haskell.Liquid.GHC.Interface
 import           Language.Haskell.Liquid.Constraint.Generate
 import           Language.Haskell.Liquid.Constraint.ToFixpoint
 import           Language.Haskell.Liquid.Constraint.Types
+import           Language.Haskell.Liquid.Casting
 import           Language.Haskell.Liquid.Model
 -- import           Language.Haskell.Liquid.Transforms.Rec
 import           Language.Haskell.Liquid.UX.Annotate (mkOutput)
+
 
 type MbEnv = Maybe HscEnv
 
@@ -62,9 +66,39 @@ liquidConstraints cfg = do
   case z of
     Left e -> do
       exitWithResult cfg (files cfg) $ mempty { o_result = e }
-      return $ Right $ resultExit e 
-    Right (gs, _) -> 
-      return $ Left $ map generateConstraints gs
+      return $ Right $ resultExit e
+    Right (gs, _) -> do
+      let cgs = map generateConstraints gs
+      -- let refts = mkRefinements <$> cgs
+      let gs' = ghcI <$> cgs
+      let cores = cbs <$> gs'
+
+      let specs = getSpecs <$> cgs
+      let tgt = target <$> gs'
+      let cfg' = getConfig <$> gs'
+      solvedSpecs <- sequenceA $ zipWith5 solveSpecs cfg' tgt cgs gs' specs
+      let sreftMaps = toRefMap <$> solvedSpecs
+      let newCores = zipWith castInsertion sreftMaps cores
+
+      let cgs' = zipWith (\cg core -> let gh = ghcI cg in
+                             cg {ghcI = gh {cbs = core}}) cgs newCores
+      mapM_ (print . ghcI) cgs'
+
+      return $ Left cgs'
+
+solveSpecs :: Config -> FilePath -> CGInfo -> GhcInfo -> [(F.Symbol, SpecType)] -> IO [(F.Symbol, SpecType)]
+solveSpecs cfg tgt cgi info specs = do
+  finfo               <- cgInfoFInfo info cgi
+  F.Result _ sol _ <- solve (fixConfig tgt cfg) finfo
+  let applySolTuple    = uncurry zip . fmap (applySolutionIgnoringG sol) . unzip
+  let resK             = applySolTuple specs
+
+  -- putStrLn "Specs"
+  -- mapM_ print specs
+  -- putStrLn "Resk"
+  -- mapM_ print resK
+
+  return resK
 
 --------------------------------------------------------------------------------
 -- | This fellow does the real work

@@ -25,6 +25,7 @@ module Language.Haskell.Liquid.Types.RefType (
 
   -- * Applying a solution to a SpecType
   , applySolution
+  , applySolutionIgnoringG
 
   -- * Functions for decreasing arguments
   , isDecreasing, makeDecrType, makeNumEnv
@@ -110,7 +111,7 @@ import Language.Haskell.Liquid.Types.Errors
 import Language.Haskell.Liquid.Types.PrettyPrint
 import qualified Language.Fixpoint.Types as F
 import Language.Fixpoint.Types hiding (DataCtor (..), panic, shiftVV, Predicate, isNumeric)
-import Language.Fixpoint.Types.Visitor (mapKVars, Visitable)
+import Language.Fixpoint.Types.Visitor (mapKVars, mapPKVars, Visitable)
 import Language.Haskell.Liquid.Types hiding (R, DataConP (..), sort)
 
 import Language.Haskell.Liquid.Types.Variance
@@ -1313,6 +1314,19 @@ applySolution = fmap . fmap . mapReft . appSolRefa
 appSolRefa :: Visitable t
            => M.HashMap KVar Expr -> t -> t
 appSolRefa s p = mapKVars f p
+  where
+    f k        = Just $ M.lookupDefault PTop k s
+
+-------------------------------------------------------------------------------
+applySolutionIgnoringG :: (Functor f) => FixSolution -> f SpecType -> f SpecType
+-------------------------------------------------------------------------------
+applySolutionIgnoringG = fmap . fmap . mapReft . appSolIgnG
+  where
+    mapReft f (MkUReft (Reft (x, z)) p s) = MkUReft (Reft (x, f z)) p s
+
+appSolIgnG :: Visitable t
+           => M.HashMap KVar Expr -> t -> t
+appSolIgnG s p = mapPKVars f p
   where
     f k        = Just $ M.lookupDefault PTop k s
 
