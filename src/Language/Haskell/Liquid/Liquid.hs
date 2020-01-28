@@ -18,7 +18,6 @@ module Language.Haskell.Liquid.Liquid (
   , liquidConstraints
   ) where
 
-import           Data.List (zipWith5)
 import           Data.Bifunctor
 import           Prelude hiding (error)
 import           System.Exit
@@ -69,22 +68,19 @@ liquidConstraints cfg = do
       return $ Right $ resultExit e
     Right (gs, _) -> do
       let cgs = map generateConstraints gs
-      -- let refts = mkRefinements <$> cgs
-      let gs' = ghcI <$> cgs
-      let cores = cbs <$> gs'
-
-      let specs = getSpecs <$> cgs
-      let tgt = target <$> gs'
-      let cfg' = getConfig <$> gs'
-      solvedSpecs <- sequenceA $ zipWith5 solveSpecs cfg' tgt cgs gs' specs
-      let sreftMaps = toRefMap <$> solvedSpecs
-      let newCores = zipWith castInsertion sreftMaps cores
-
-      let cgs' = zipWith (\cg core -> let gh = ghcI cg in
-                             cg {ghcI = gh {cbs = core}}) cgs newCores
-      mapM_ (print . ghcI) cgs'
-
+      cgs' <- sequenceA $ castCore <$> cgs
       return $ Left cgs'
+
+castCore :: CGInfo -> IO CGInfo
+castCore cgi = do
+  let gi = ghcI cgi
+  let cfg = getConfig gi
+  let tgt = target gi
+  let specs = getSpecs cgi
+  solvedSpecs <- solveSpecs cfg tgt cgi gi specs
+  let sreftMap = toRefMap solvedSpecs
+  let newCore = castInsertion sreftMap (cbs gi)
+  return $ cgi {ghcI = gi {cbs = newCore}}
 
 solveSpecs :: Config -> FilePath -> CGInfo -> GhcInfo -> [(F.Symbol, SpecType)] -> IO [(F.Symbol, SpecType)]
 solveSpecs cfg tgt cgi info specs = do
