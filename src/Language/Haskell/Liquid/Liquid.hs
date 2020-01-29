@@ -80,7 +80,12 @@ castCore cgi = do
   solvedSpecs <- solveSpecs cfg tgt cgi gi specs
   let sreftMap = toRefMap solvedSpecs
   let newCore = castInsertion sreftMap (cbs gi)
-  return $ cgi {ghcI = gi {cbs = newCore}}
+  let cgi' = cgi {ghcI = gi {cbs = newCore}}
+
+  whenNormal $ do donePhase Loud "Casts inserted"
+                  print $ ghcI cgi'
+
+  return $ cgi'
 
 solveSpecs :: Config -> FilePath -> CGInfo -> GhcInfo -> [(F.Symbol, SpecType)] -> IO [(F.Symbol, SpecType)]
 solveSpecs cfg tgt cgi info specs = do
@@ -227,6 +232,7 @@ solveCs cfg tgt cgi info names = do
   resModel_        <- fmap (e2u sol) <$> getModels info cfg resErr
   let resModel      = resModel_  `addErrors` (e2u sol <$> logErrors cgi)
   let out0          = mkOutput cfg resModel sol (annotMap cgi)
+  _ <- castCore cgi
   return            $ out0 { o_vars    = names    }
                            { o_result  = resModel }
 

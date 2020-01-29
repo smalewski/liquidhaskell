@@ -94,11 +94,11 @@ cod :: SReft -> SReft
 cod (DFun _ _ _ o) = o
 cod _ = Noref
 
-lookupReft :: Symbolic a => Refinements -> a -> Maybe SReft
-lookupReft refts x = M.lookup (F.symbol x) refts
+lookupSReft :: Symbolic a => Refinements -> a -> Maybe SReft
+lookupSReft refts x = M.lookup (F.symbol x) refts
 
-lookupReftDef :: Symbolic a => Refinements -> a -> SReft
-lookupReftDef refts = fromMaybe Noref . lookupReft refts
+lookupSReftDef :: Symbolic a => Refinements -> a -> SReft
+lookupSReftDef refts = fromMaybe Noref . lookupSReft refts
 
 -- maybeToRefts :: Maybe (Symbol, SReft) -> Refinements
 -- maybeToRefts = M.fromList . maybeToList
@@ -117,14 +117,21 @@ insertCast myr tgr expr
     e = mkCharExpr '`'
     -- str = show myr ++ " => " ++ show tgr
 
-exprReft :: Refinements -> CoreExpr -> SReft
-exprReft refts (Var x) = lookupReftDef refts x
-exprReft refts (App f _) = cod $ exprReft refts f
-exprReft refts (Let _ e) = exprReft refts e
-exprReft refts (Tick _ e) = exprReft refts e
-exprReft refts (Cast e _) = exprReft refts e
--- exprReft refts (Lam x e) = DFun (F.symbol x) Nothing (lookupReftDef refts (F.symbol x)) $ exprReft refts e
-exprReft _ _ = Noref
+ifNoref :: SReft -> SReft -> SReft
+ifNoref x Noref = x
+ifNoref _ y     = y
+
+exprReft :: Refinements -> SReft -> CoreExpr -> SReft
+exprReft refts myr (Var x) = fromMaybe myr $ lookupSReft refts x
+exprReft refts myr (App f _) = cod $ exprReft refts (dom myr) f
+exprReft refts myr (Let _ e) = exprReft refts myr e
+exprReft refts myr (Tick _ e) = exprReft refts myr e
+exprReft refts myr (Cast e _) = exprReft refts myr e
+exprReft refts myr (Lam x e) = DFun (F.symbol x) F.trueReft xReft eReft
+  where
+    xReft = fromMaybe (dom myr) $ lookupSReft refts x
+    eReft = ifNoref myr $ exprReft refts (cod myr) e
+exprReft _ myr _ = myr
 
 castInsertion :: Refinements -> [CoreBind] -> [CoreBind]
 castInsertion refts bs = castInsertionBind refts <$> bs
@@ -132,11 +139,11 @@ castInsertion refts bs = castInsertionBind refts <$> bs
 castInsertionExpr :: Refinements -> SReft -> CoreExpr -> CoreExpr
 castInsertionBind :: Refinements -> CoreBind -> CoreBind
 castInsertionBind refts (NonRec x expr) =
-  NonRec x $ castInsertionExpr refts (lookupReftDef refts x) expr
+  NonRec x $ castInsertionExpr refts (lookupSReftDef refts x) expr
 castInsertionBind refts (Rec bs) =
   Rec $ castInRec <$> bs
   where
-    castInRec (bnd, expr) = (bnd, castInsertionExpr refts (lookupReftDef refts bnd) expr)
+    castInRec (bnd, expr) = (bnd, castInsertionExpr refts (lookupSReftDef refts bnd) expr)
 
 castInsertionExpr refts myr expr = case expr of
   Var{} -> expr
@@ -145,8 +152,8 @@ castInsertionExpr refts myr expr = case expr of
     | F.isGradual argReft -> App fun' castedArg
     | otherwise           -> App fun' arg'
     where
-      funReft =  exprReft refts fun
-      argReft =  exprReft refts arg
+      funReft =  exprReft refts Noref fun
+      argReft =  exprReft refts Noref arg
       arg' = castInsertionExpr refts argReft arg
       fun' = castInsertionExpr refts funReft fun
       castedArg = insertCast argReft (dom funReft) arg'
@@ -159,7 +166,7 @@ castInsertionExpr refts myr expr = case expr of
       e' = castInsertionExpr refts myr e
   Case e x t alts -> Case e' x t alts'
     where
-      eReft = exprReft refts e
+      eReft = exprReft refts Noref e
       e' = castInsertionExpr refts eReft e
       alts' = castInsertionAlt refts myr <$> alts
   Cast e coer -> Cast (castInsertionExpr refts myr e) coer
@@ -171,7 +178,7 @@ castInsertionAlt :: Refinements -> SReft -> CoreAlt -> CoreAlt
 castInsertionAlt refts tgr (con, xs, e) = (con, xs, e'')
   where
     e' = castInsertionExpr refts myr e
-    myr =  exprReft refts e'
+    myr = exprReft refts tgr e'
     e'' = if any F.isGradual [myr, tgr] then insertCast myr tgr e' else e'
 
 -- DEBUGGING STUFF
