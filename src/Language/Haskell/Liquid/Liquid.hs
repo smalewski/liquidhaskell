@@ -78,8 +78,9 @@ castCore cgi = do
   let tgt = target gi
   let specs = getSpecs cgi
   solvedSpecs <- solveSpecs cfg tgt cgi gi specs
-  let sreftMap = toRefMap solvedSpecs
-  let newCore = castInsertion sreftMap (cbs gi)
+  -- let sreftMap = toRefMap solvedSpecs
+  let specMap = F.fromListSEnv solvedSpecs
+  let newCore = castInsertion specMap (cbs gi)
   let cgi' = cgi {ghcI = gi {cbs = newCore}}
 
   whenNormal $ do donePhase Loud "Casts inserted"
@@ -93,12 +94,6 @@ solveSpecs cfg tgt cgi info specs = do
   F.Result _ sol _ <- solve (fixConfig tgt cfg) finfo
   let applySolTuple    = uncurry zip . fmap (applySolutionIgnoringG sol) . unzip
   let resK             = applySolTuple specs
-
-  -- putStrLn "Specs"
-  -- mapM_ print specs
-  -- putStrLn "Resk"
-  -- mapM_ print resK
-
   return resK
 
 --------------------------------------------------------------------------------
