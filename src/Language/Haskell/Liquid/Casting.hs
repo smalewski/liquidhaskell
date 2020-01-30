@@ -7,18 +7,19 @@ module Language.Haskell.Liquid.Casting (
   ) where
 
 import           CoreSyn
+import           CoreUtils
 -- import           Data.Bifunctor
 -- import           Data.List (sortOn)
 import           Data.Maybe (fromMaybe)
-import           MkCore
--- import           Unique
--- import           Id
--- import           Name
+-- import           MkCore
+import           Unique
+import           Id
+import           Name
+-- import           Type
 -- import           Type
 -- import           OccName
--- import           FastString
+import           FastString
 -- import           Literal (Literal)
-import           TysPrim
 import qualified Data.HashMap.Strict as M
 import qualified Language.Fixpoint.Types as F
 import           Language.Fixpoint.Types (Symbolic, Reft (..), Symbol, HasGradual (..))
@@ -109,13 +110,13 @@ holds p q = (F.ungrad p) == (F.ungrad q)
 insertCast :: SReft -> SReft -> CoreExpr -> CoreExpr
 insertCast myr tgr expr
   | holds myr tgr = expr
-  | otherwise     = mkCoreLet bnd expr
+  | otherwise     = castedExpr
   where
-    bnd = NonRec name e
-    ty = charPrimTy
-    name = mkWildValBinder ty
-    e = mkCharExpr '`'
-    -- str = show myr ++ " => " ++ show tgr
+    castedExpr = bindNonRec (mkLocalId name ty) strLit expr
+    strLit = mkStringLit $ "Casting: " ++ show myr ++ " => " ++ show tgr
+    ty = exprType strLit
+    name = mkSystemName (mkVarOccUnique $ fsLit varName) (mkVarOcc varName)
+    varName = "casting"
 
 ifNoref :: SReft -> SReft -> SReft
 ifNoref x Noref = x
