@@ -21,14 +21,19 @@ module Language.Haskell.Liquid.Liquid (
 import           Data.Bifunctor
 import           Prelude hiding (error)
 import           System.Exit
+import           UniqSupply       (mkSplitUniqSupply)
+import           SrcLoc
+import           Module
 import           Text.PrettyPrint.HughesPJ
--- import           Var                              (Var)
 import           CoreSyn
+import           Outputable (alwaysQualify)
+import           Rules (emptyRuleBase)
 import           HscTypes (SourceError)
 import           GHC (HscEnv)
 import           System.Console.CmdArgs.Verbosity (whenLoud, whenNormal)
 import           Control.Monad (when)
 import qualified Control.Exception as Ex
+import           Gradual.CastInsertion
 -- import qualified Language.Fixpoint.Types.Config as FC
 import qualified Language.Haskell.Liquid.UX.DiffCheck as DC
 import           Language.Haskell.Liquid.Misc
@@ -46,7 +51,6 @@ import           Language.Haskell.Liquid.GHC.Interface
 import           Language.Haskell.Liquid.Constraint.Generate
 import           Language.Haskell.Liquid.Constraint.ToFixpoint
 import           Language.Haskell.Liquid.Constraint.Types
-import           Language.Haskell.Liquid.Casting
 import           Language.Haskell.Liquid.Model
 -- import           Language.Haskell.Liquid.Transforms.Rec
 import           Language.Haskell.Liquid.UX.Annotate (mkOutput)
@@ -80,11 +84,22 @@ castCore cgi = do
   solvedSpecs <- solveSpecs cfg tgt cgi gi specs
   -- let sreftMap = toRefMap solvedSpecs
   let specMap = F.fromListSEnv solvedSpecs
-  let newCore = castInsertion specMap (cbs gi)
+  let hscEnv = env gi
+  let rules = emptyRuleBase
+  uniq <- mkSplitUniqSupply 'c'
+  let moduleName = targetMod gi
+  let mod =  mkModule (stringToUnitId $ moduleNameString moduleName) moduleName
+  let modSet = mkModuleSet [mod]
+  let printUnq = alwaysQualify
+  let srcSpan = noSrcSpan
+  let tcemb = gsTcEmbeds $ spec gi
+  let castedCore = castInsertions specMap (cbs gi)
+  (newCore, _) <- runToCore hscEnv rules uniq mod modSet printUnq srcSpan tcemb castedCore
   let cgi' = cgi {ghcI = gi {cbs = newCore}}
 
   whenNormal $ do donePhase Loud "Casts inserted"
                   print $ ghcI cgi'
+                  -- dumpCs cgi'
 
   return $ cgi'
 

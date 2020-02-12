@@ -155,7 +155,6 @@ Library
                     Language.Haskell.Liquid.Foreign,
                     Language.Haskell.Liquid.List,
                     Language.Haskell.Liquid.Bare,
-                    Language.Haskell.Liquid.Casting,
                     Language.Haskell.Liquid.Constraint.Constraint,
                     Language.Haskell.Liquid.Constraint.Init,
                     Language.Haskell.Liquid.Constraint.Monad,
@@ -276,7 +275,11 @@ Library
                     Gradual.GUI.Annotate,
                     Gradual.GUI.Types,
                     Gradual.GUI.Misc,
-                    Gradual.Match
+                    Gradual.Match,
+                    Gradual.CastInsertion,
+                    Gradual.CastInsertion.Casting,
+                    Gradual.CastInsertion.ExprToCore,
+                    Gradual.CastInsertion.Monad
 
    ghc-options: -W -fwarn-missing-signatures
    if flag(include)
