@@ -4,6 +4,7 @@
 {-# LANGUAGE LambdaCase           #-}
 {-# LANGUAGE OverloadedStrings    #-}
 {-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE TupleSections #-}
 {-# LANGUAGE TypeSynonymInstances #-}
 
 module Gradual.CastInsertion.Casting (
@@ -17,7 +18,7 @@ import           CoreSyn
 import           CoreUtils
 import qualified Data.HashMap.Strict                      as M
 import           Data.List                                (any)
-import           Data.Maybe                               (fromMaybe)
+import           Data.Maybe                               (fromMaybe, mapMaybe, maybeToList)
 import           FastString
 import           Id
 import           MkCore
@@ -172,11 +173,13 @@ insertCast myr tgr expr
   | otherwise     = castedExpr
   where
     reft = ungrad $ rTypeReft tgr
-    castedExpr = mkIfThenElse <$> check <*> pure expr <*> pure errExpr
+    checkExpr v = mkIfThenElse <$> specToCore tgr v <*> pure (Var v) <*> pure errExpr
+    castedExpr = do
+      v <- freshId "v" ty
+      bindNonRec v expr <$> checkExpr v
     errExpr = mkRuntimeErrorApp rUNTIME_ERROR_ID ty errMsg
     errMsg = "Cast error: " ++ show reft ++ " is not satisfied."
     ty = exprType expr
-    check = specToCore tgr
 
 dom' :: SpecType -> SpecType
 dom' s = fromMaybe (error "DOm") (dom s) -- FIXME
@@ -187,12 +190,23 @@ cod' s = fromMaybe (error "COD") (cod s) -- FIXME
 expandCast :: SpecType -> SpecType -> CoreExpr -> ToCore CoreExpr
 expandCast myr tgr e = do
   let ty = toType $ dom' myr
-  x <- freshId ty
-  y <- freshId ty
-  let ey = trace ("IDs :" ++ show x ++ ", " ++ show y) mkCoreApps e [Var y]
+  x <- freshId "x" ty
+  y <- freshId "y" ty
+  let fs = (,y) <$> mapMaybe mySymbol [myr, tgr]
+  let ey = mkCoreApps e [Var y]
   xCast <- insertCast (dom' tgr) (dom' myr) (Var x)
-  eyCast <- insertCast (cod' myr) (cod' tgr) ey -- FIXME Need tysubst
-  pure $ bindNonRec y xCast eyCast
+  eyCast <- withSubs fs $ insertCast (cod' myr) (cod' tgr) ey -- FIXME Need tysubst
+  let body = bindNonRec y xCast eyCast
+  pure $ mkCoreLams [x] body
+
+mySymbol :: SpecType -> Maybe Symbol
+mySymbol (RFun x _ _ _) = Just x
+mySymbol (RAllT _ t) = mySymbol t
+mySymbol (RAllP _ t) = mySymbol t
+mySymbol (RAllS _ t) = mySymbol t
+mySymbol (RAllE _ _ t) = mySymbol t
+mySymbol (REx _ _ t) = mySymbol t
+mySymbol _ = Nothing
 
 exprSType :: Refinements -> Maybe SpecType -> CoreExpr -> Maybe SpecType
 exprSType refts myr (Var x) = fstMaybe (lookupSType refts x) myr
@@ -241,7 +255,8 @@ castInsertionExpr refts myr expr = case expr of
         pure $ arg' >>= insertCast fromR toR
   Lam x body -> Lam x <$> body'
     where
-      body' = castInsertionExpr refts (myr >>= cod) body
+      fs = fmap (,x) $ mapMaybe mySymbol $ maybeToList myr
+      body' = withSubs fs $ castInsertionExpr refts (myr >>= cod) body
   Let b e -> Let <$> b' <*> e'
     where
       b' = castInsertionBind refts b

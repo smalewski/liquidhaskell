@@ -26,7 +26,9 @@ module Gradual.CastInsertion.Monad (
   lookupLocalId,
   insertLocalId,
   tyconFTycon,
-  ftyconTycon
+  ftyconTycon,
+  withCore,
+  withSubs
   ) where
 
 import           Control.Monad.Reader
@@ -48,9 +50,11 @@ import           SrcLoc (SrcSpan, noSrcSpan)
 import           TyCon (TyCon)
 import           Type (Type)
 import           UniqSupply (MonadUnique (..), UniqSupply)
+import           Var
 
 import           Language.Fixpoint.Types       (SEnv, Symbolic (..), emptySEnv, Sort,
-                                                insertSEnv, lookupSEnv, Symbol, TCEmb, FTycon)
+                                                insertSEnv, lookupSEnv, Symbol, TCEmb, FTycon,
+                                                fromListSEnv, unionSEnv')
 import           Language.Haskell.Liquid.Types ()
 
 newtype ToCore a = ToCore {
@@ -91,6 +95,17 @@ instance HasModule ToCore where
 instance MonadThings ToCore where
   lookupThing = liftCore . lookupThing
 
+withCore :: (ToCoreState -> ToCoreState) -> ToCore a -> ToCore a
+withCore f tc = ToCore $ ReaderT $ \r -> withStateT f $ flip runReaderT r $ unToCoreM tc
+
+withSubs :: [(Symbol, Id)] -> ToCore a -> ToCore a
+withSubs subs tc = do
+  ids <- gets to_core_ids
+  let ids' = fromListSEnv subs
+  let uids = unionSEnv' ids ids'
+  modify (\s -> s {to_core_ids = uids})
+  tc
+
 liftCore :: CoreM a -> ToCore a
 liftCore cm = ToCore $ ReaderT $ \_ ->  StateT $ \s -> (, s) <$> cm
 
@@ -107,10 +122,12 @@ tyConEnv :: ToCore (M.HashMap TyCon FTycon)
 tyConEnv = asks to_core_tycons
 
 emptyToCoreState :: ToCoreState
-emptyToCoreState = ToCoreState {to_core_ids = mempty, to_core_expr_sort = mempty}
+emptyToCoreState = ToCoreState {to_core_ids = mempty,
+                                to_core_expr_sort = mempty}
 
 emptyToCoreInfo :: ToCoreInfo
-emptyToCoreInfo = ToCoreInfo {to_core_ftycons = mempty, to_core_tycons = mempty}
+emptyToCoreInfo = ToCoreInfo {to_core_ftycons = mempty,
+                              to_core_tycons = mempty}
 
 insertSymSort :: Symbolic a => a -> Sort -> ToCore ()
 insertSymSort name idx =
@@ -131,10 +148,10 @@ tyconFTycon tc = asks (\s -> M.lookup tc $ to_core_ftycons s)
 ftyconTycon :: TyCon -> ToCore (Maybe FTycon)
 ftyconTycon tc = asks (\s -> M.lookup tc $ to_core_tycons s)
 
-freshId :: Type -> ToCore Id
-freshId ty = do
+freshId :: String -> Type -> ToCore Id
+freshId s ty = do
   uniq <- getUniqueM
-  let occ = mkVarOcc "c"
+  let occ = mkVarOcc $ s ++ "#" ++ show uniq
   let name = mkInternalName uniq occ noSrcSpan
   pure $ mkLocalId name ty
 

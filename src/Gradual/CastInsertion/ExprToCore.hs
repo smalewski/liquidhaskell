@@ -42,10 +42,10 @@ import           Language.Haskell.Liquid.Types       hiding (R)
 import           Language.Haskell.Liquid.Types.RefType     (toType, rTypeSortedReft)
 import           Language.Haskell.Liquid.GHC.Misc                      (showCBs)
 
-specToCore :: SpecType -> ToCore CoreExpr
-specToCore spec = do
-  let ty = toType spec
-  vId <- freshId ty
+specToCore :: SpecType -> Id -> ToCore CoreExpr
+specToCore spec vId = do
+  -- let ty = toType spec
+  -- vId <- freshId "v" ty
   embTC <- tyConEnv
   let RR s (Reft(v, e)) = ungrad $ rTypeSortedReft embTC spec
   insertLocalId v vId
@@ -90,10 +90,8 @@ negToCore e = do
 
 castToCore :: Expr -> F.Sort -> ToCore CoreExpr
 castToCore e s = do
-  -- let fromSort = sortExpr  F.emptySEnv e
-  -- let fromTy = sortType fromSort
   toTy <- sortType s
-  idn <- freshId toTy
+  idn <- freshId "tc" toTy
   let coer = mkCoVarCo idn
   expr <- exprToCore e
   pure $ mkCast expr coer
@@ -110,7 +108,7 @@ sortType (FVar n) = error "var"
 sortType (FFunc s1 s2) = do
   t1  <- sortType s1
   t2  <- sortType s2
-  var <- freshId t1
+  var <- freshId "fx" t1
   pure $ mkLamType var t2
 sortType (FAbs n s) = error "abs"
 sortType (FTC tc) = error "tc"
@@ -130,11 +128,8 @@ ftcType ftc = do
 lamToCore :: F.Symbol -> F.Sort -> Expr -> ToCore CoreExpr
 lamToCore x s e = do
   insertSymSort x s
-  let occ = mkVarOcc $ F.symbolString x
   ty <- sortType s
-  uniq <- getUniqueM
-  let name = mkInternalName uniq occ noSrcSpan
-  let b = mkLocalId name ty
+  b <- freshId (F.symbolString x) ty
   ec <- exprToCore e
   pure $ mkCoreLams [b] ec
 
@@ -158,10 +153,8 @@ orToCore es = do
 andCore :: [CoreExpr] -> ToCore CoreExpr
 andCore es = do
   and <- Var <$> lookupTCId "GHC.Classes.&&"
-  idn <- freshId anyTy
   let true = Var trueDataConId
   let expr = inter and true es
-  _ <- trace (showCBs False [NonRec idn expr]) $ pure ()
   pure expr
 
 orCore :: [CoreExpr] -> ToCore CoreExpr
