@@ -111,7 +111,7 @@ sortType (FFunc s1 s2) = do
   var <- freshId "fx" t1
   pure $ mkLamType var t2
 sortType (FAbs n s) = error "abs"
-sortType (FTC tc) = error "tc"
+sortType (FTC tc) = ftcType tc
 sortType (FApp s1 s2) = do
   t1 <- sortType s1
   t2 <- sortType s2
