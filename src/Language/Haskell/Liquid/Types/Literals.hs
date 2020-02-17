@@ -2,6 +2,7 @@
 
 module Language.Haskell.Liquid.Types.Literals (
          literalFRefType
+       , literalSpecType
        , literalFReft
        , literalConst
 
@@ -30,6 +31,10 @@ makeRTypeBase (TyConApp c ts) x
   = rApp c ((`makeRTypeBase` mempty) <$> ts) [] x
 makeRTypeBase _              _
   = panic Nothing "RefType : makeRTypeBase"
+
+literalSpecType :: Literal -> SpecType
+literalSpecType l =
+  makeRTypeBase (literalType l) (uTop $ literalFReft l)
 
 literalFRefType :: Literal -> RType RTyCon RTyVar F.Reft
 literalFRefType l

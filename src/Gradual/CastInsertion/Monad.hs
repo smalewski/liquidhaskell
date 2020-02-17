@@ -56,6 +56,7 @@ import           Language.Fixpoint.Types       (SEnv, Symbolic (..), emptySEnv, 
                                                 insertSEnv, lookupSEnv, Symbol, TCEmb, FTycon,
                                                 fromListSEnv, unionSEnv')
 import           Language.Haskell.Liquid.Types ()
+import           Language.Haskell.Liquid.Constraint.Types (CGInfo (..))
 
 newtype ToCore a = ToCore {
   unToCoreM :: ReaderT ToCoreInfo (StateT ToCoreState CoreM) a
@@ -68,8 +69,9 @@ data ToCoreState = ToCoreState {
 
 data ToCoreInfo = ToCoreInfo {
   to_core_ftycons :: M.HashMap FTycon TyCon,
-  to_core_tycons :: M.HashMap TyCon FTycon
-  } deriving (Show)
+  to_core_tycons :: M.HashMap TyCon FTycon,
+  to_core_cginfo :: CGInfo
+  }
 
 class Monad m => Debugger m where
   printMsg   :: String -> m ()
@@ -121,13 +123,14 @@ fTyConEnv = asks to_core_ftycons
 tyConEnv :: ToCore (M.HashMap TyCon FTycon)
 tyConEnv = asks to_core_tycons
 
-emptyToCoreState :: ToCoreState
-emptyToCoreState = ToCoreState {to_core_ids = mempty,
-                                to_core_expr_sort = mempty}
+defaultToCoreState :: ToCoreState
+defaultToCoreState = ToCoreState {to_core_ids = mempty,
+                                  to_core_expr_sort = mempty}
 
-emptyToCoreInfo :: ToCoreInfo
-emptyToCoreInfo = ToCoreInfo {to_core_ftycons = mempty,
-                              to_core_tycons = mempty}
+defaultToCoreInfo :: CGInfo -> ToCoreInfo
+defaultToCoreInfo cgi = ToCoreInfo {to_core_ftycons = mempty,
+                                    to_core_tycons = mempty,
+                                    to_core_cginfo = cgi}
 
 insertSymSort :: Symbolic a => a -> Sort -> ToCore ()
 insertSymSort name idx =
@@ -155,10 +158,10 @@ freshId s ty = do
   let name = mkInternalName uniq occ noSrcSpan
   pure $ mkLocalId name ty
 
-runToCoreDef :: TCEmb TyCon -> ToCore a -> CoreM a
-runToCoreDef tc = flip evalStateT emptyToCoreState . flip runReaderT info . unToCoreM
+runToCoreDef :: CGInfo -> TCEmb TyCon -> ToCore a -> CoreM a
+runToCoreDef cgi tc = flip evalStateT defaultToCoreState . flip runReaderT info . unToCoreM
   where
-    info = emptyToCoreInfo { to_core_tycons = tc }
+    info = (defaultToCoreInfo cgi) { to_core_tycons = tc }
 
-runToCore :: HscEnv -> RuleBase -> UniqSupply -> Module -> ModuleSet -> PrintUnqualified -> SrcSpan -> TCEmb TyCon -> ToCore a -> IO (a, SimplCount)
-runToCore he rb us mod ms pu ss tc = runCoreM he rb us mod ms pu ss . runToCoreDef tc
+runToCore :: HscEnv -> RuleBase -> UniqSupply -> Module -> ModuleSet -> PrintUnqualified -> SrcSpan -> CGInfo -> TCEmb TyCon -> ToCore a -> IO (a, SimplCount)
+runToCore he rb us mod ms pu ss cgi tc = runCoreM he rb us mod ms pu ss . runToCoreDef cgi tc

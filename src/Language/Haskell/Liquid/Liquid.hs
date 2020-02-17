@@ -94,7 +94,7 @@ castCore cgi = do
   let srcSpan = noSrcSpan
   let tcemb = gsTcEmbeds $ spec gi
   let castedCore = castInsertions specMap (cbs gi)
-  (newCore, _) <- runToCore hscEnv rules uniq mod modSet printUnq srcSpan tcemb castedCore
+  (newCore, _) <- runToCore hscEnv rules uniq mod modSet printUnq srcSpan cgi tcemb castedCore
   let cgi' = cgi {ghcI = gi {cbs = newCore}}
 
   whenNormal $ do donePhase Loud "Casts inserted"

@@ -42,6 +42,8 @@ import           Language.Haskell.Liquid.Types            hiding (binds)
 import           Language.Haskell.Liquid.Types.RefType (toType)
 import           Language.Haskell.Liquid.UX.Tidy          (tidySpecType)
 import           Language.Haskell.Liquid.GHC.Misc                      (showCBs)
+import           Language.Haskell.Liquid.Types.Literals (literalSpecType)
+import           Language.Haskell.Liquid.Transforms.CoreToLogic (logicType)
 
 type Refinements = F.SEnv SpecType
 
@@ -208,17 +210,23 @@ mySymbol (RAllE _ _ t) = mySymbol t
 mySymbol (REx _ _ t) = mySymbol t
 mySymbol _ = Nothing
 
-exprSType :: Refinements -> Maybe SpecType -> CoreExpr -> Maybe SpecType
-exprSType refts myr (Var x) = fstMaybe (lookupSType refts x) myr
-exprSType refts myr (App f _) = exprSType refts (myr >>= dom) f >>= cod
-exprSType refts myr (Let _ e) = exprSType refts myr e
-exprSType refts myr (Tick _ e) = exprSType refts myr e
-exprSType refts myr (Cast e _) = exprSType refts myr e
-exprSType refts myr (Lam x e) = rFun (F.symbol x) <$> xReft <*> eReft
+exprSType :: Refinements -> CoreExpr -> Maybe SpecType
+exprSType refts (Var x) = lookupSType refts x
+exprSType refts (App f _) = exprSType refts f >>= cod
+exprSType refts (Let _ e) = exprSType refts e
+exprSType refts (Tick _ e) = exprSType refts e
+exprSType refts (Cast e _) = exprSType refts e
+exprSType refts (Lam x e) = rFun (F.symbol x) <$> xReft <*> eReft
   where
-    xReft = fstMaybe (lookupSType refts x) $ myr >>= dom
-    eReft = fstMaybe (exprSType refts (myr >>= cod) e) myr
-exprSType _ myr _ = myr
+    xReft = lookupSType refts x
+    eReft = exprSType refts e
+exprSType refts (Lit l) = Just $ literalSpecType l
+exprSType refts (Case e b t alts) = altSType refts (head alts)
+exprSType refts (Type t) = Just $ logicType t
+exprSType _ _ = error "Cant find type of expr."
+
+altSType :: Refinements -> CoreAlt -> Maybe SpecType
+altSType refts (_, _, e) = exprSType refts e
 
 fstMaybe :: Maybe a -> Maybe a -> Maybe a
 fstMaybe Nothing y = y
@@ -245,8 +253,8 @@ castInsertionExpr refts myr expr = case expr of
   App fun arg -> App <$> fun' <*> arg''
     where
       arg''     = if isGradual argReft then castedArg else arg'
-      funReft   = exprSType refts Nothing fun
-      argReft   = exprSType refts Nothing arg
+      funReft   = exprSType refts fun
+      argReft   = exprSType refts arg
       fun'      = castInsertionExpr refts funReft fun
       arg'      = castInsertionExpr refts argReft arg
       castedArg = fromMaybe arg' $ do
@@ -263,7 +271,7 @@ castInsertionExpr refts myr expr = case expr of
       e' = castInsertionExpr refts myr e
   Case e x t alts -> Case <$> e' *>> x *>> t <*> alts'
     where
-      eReft = exprSType refts Nothing e
+      eReft = exprSType refts e
       e'    = castInsertionExpr refts eReft e
       alts' = mapM (castInsertionAlt refts myr) alts
   Cast e coer -> Cast <$> castInsertionExpr refts myr e *>> coer
@@ -273,7 +281,7 @@ castInsertionExpr refts myr expr = case expr of
 
 castInsertionAlt :: Refinements -> Maybe SpecType -> CoreAlt -> ToCore CoreAlt
 castInsertionAlt refts tgr (con, xs, e) = do
-    let myr = exprSType refts tgr e
+    let myr = exprSType refts e
     e'  <- castInsertionExpr refts myr e
     let needed = any F.isGradual [myr, tgr]
     e'' <- ifButNothing needed (insertCast <$> myr <*> tgr *>> e') $ pure e'
