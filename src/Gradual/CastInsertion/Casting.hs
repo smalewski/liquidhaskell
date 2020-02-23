@@ -9,8 +9,7 @@
 
 module Gradual.CastInsertion.Casting (
   castInsertion,
-  castInsertions,
-  getSpecs,
+  castInsertions
   ) where
 
 import           Debug.Trace
@@ -44,16 +43,6 @@ import           Language.Haskell.Liquid.UX.Tidy          (tidySpecType)
 import           Language.Haskell.Liquid.GHC.Misc                      (showCBs)
 import           Language.Haskell.Liquid.Types.Literals (literalSpecType)
 import           Language.Haskell.Liquid.Transforms.CoreToLogic (logicType)
-
-type Refinements = F.SEnv SpecType
-
-getSpecs :: CGInfo -> [(Symbol, SpecType)]
-getSpecs cg = concat $ localSpecs ++ globalSpecs
-  where
-    localSpecs = cgToSpecs reLocal
-    globalSpecs = cgToSpecs reGlobal
-    toMaps f = fmap (f . renv . senv) . hsCs
-    cgToSpecs f = M.toList <$> toMaps f cg
 
 -- TEMPORARY ORPHAN INSTANCES
 -- Forgive me god
@@ -128,25 +117,27 @@ instance HasGradual a => HasGradual (Maybe a) where
   ungrad = fmap ungrad
 
 
-dom :: SpecType -> Maybe SpecType
-dom (RFun _ i _ _) = Just i
-dom (RAllT _ s) = dom s
-dom (RAllP _ s) = dom s
-dom (RAllS _ s) = dom s
-dom (RAllE _ _ s) = dom s
-dom _              = Nothing
+dom' :: SpecType -> Maybe SpecType
+dom' (RFun _ i _ _) = Just i
+dom' (RAllT _ s) = dom' s
+dom' (RAllP _ s) = dom' s
+dom' (RAllS _ s) = dom' s
+dom' (RAllE _ _ s) = dom' s
+dom' _              = Nothing
 
-cod :: SpecType -> Maybe SpecType
-cod (RFun _ _ o _) = Just o
-cod (RAllT _ s) = cod s
-cod (RAllP _ s) = cod s
-cod (RAllS _ s) = cod s
-cod (RAllE _ _ s) = cod s
-cod _              = Nothing
+cod' :: SpecType -> Maybe SpecType
+cod' (RFun _ _ o _) = Just o
+cod' (RAllT _ s) = cod' s
+cod' (RAllP _ s) = cod' s
+cod' (RAllS _ s) = cod' s
+cod' (RAllE _ _ s) = cod' s
+cod' _              = Nothing
 
-lookupSType :: Symbolic a => Refinements -> a -> Maybe SpecType
-lookupSType refts x = F.lookupSEnv (F.symbol x) refts
+dom :: SpecType -> ToCore SpecType
+dom = liftMaybe "dom is not defined for non function types." . dom'
 
+cod :: SpecType -> ToCore SpecType
+cod = liftMaybe "cod is not defined for non function types." . cod'
 
 -- Needs to replace with proper subtyping checking.
 compareSpecTypes :: SpecType -> SpecType -> Bool
@@ -183,22 +174,16 @@ insertCast myr tgr expr
     errMsg = "Cast error: " ++ show reft ++ " is not satisfied."
     ty = exprType expr
 
-dom' :: SpecType -> SpecType
-dom' s = fromMaybe (error "DOm") (dom s) -- FIXME
-
-cod' :: SpecType -> SpecType
-cod' s = fromMaybe (error "COD") (cod s) -- FIXME
-
 expandCast :: SpecType -> SpecType -> CoreExpr -> ToCore CoreExpr
 expandCast myr tgr e = do
-  let ty = toType $ dom' myr
+  ty <- toType <$> dom myr
   x <- freshId "x" ty
   y <- freshId "y" ty
   let fs = (,y) <$> mapMaybe mySymbol [myr, tgr]
   let ey = mkCoreApps e [Var y]
-  xCast <- insertCast (dom' tgr) (dom' myr) (Var x)
-  eyCast <- withSubs fs $ insertCast (cod' myr) (cod' tgr) ey -- FIXME Need tysubst
-  let body = bindNonRec y xCast eyCast
+  xCast <- insertCast <$> dom tgr <*> dom myr <*> pure (Var x)
+  eyCast <- withSubs fs $ insertCast <$> cod myr <*> cod tgr <*> pure ey
+  body <- bindNonRec y <$> xCast <*> eyCast
   pure $ mkCoreLams [x] body
 
 mySymbol :: SpecType -> Maybe Symbol
@@ -210,84 +195,105 @@ mySymbol (RAllE _ _ t) = mySymbol t
 mySymbol (REx _ _ t) = mySymbol t
 mySymbol _ = Nothing
 
-exprSType :: Refinements -> CoreExpr -> Maybe SpecType
-exprSType refts (Var x) = lookupSType refts x
-exprSType refts (App f _) = exprSType refts f >>= cod
-exprSType refts (Let _ e) = exprSType refts e
-exprSType refts (Tick _ e) = exprSType refts e
-exprSType refts (Cast e _) = exprSType refts e
-exprSType refts (Lam x e) = rFun (F.symbol x) <$> xReft <*> eReft
-  where
-    xReft = lookupSType refts x
-    eReft = exprSType refts e
-exprSType refts (Lit l) = Just $ literalSpecType l
-exprSType refts (Case e b t alts) = altSType refts (head alts)
-exprSType refts (Type t) = Just $ logicType t
-exprSType _ _ = error "Cant find type of expr."
+exprSType :: CoreExpr -> ToCore SpecType
+exprSType (Var x) = lookupSType x
+exprSType (App f _) = exprSType f >>= cod
+exprSType (Let _ e) = exprSType e
+exprSType (Tick _ e) = exprSType e
+exprSType (Cast e _) = exprSType e
+exprSType (Lam x e) =
+    rFun (F.symbol x) <$> lookupSType x <*> exprSType e
+exprSType (Lit l) = pure $ literalSpecType l
+exprSType (Case e b t alts) = altSType (head alts)
+exprSType (Type t) = pure $ logicType t
+exprSType _ = fail "Expression doesn't have type."
 
-altSType :: Refinements -> CoreAlt -> Maybe SpecType
-altSType refts (_, _, e) = exprSType refts e
+altSType :: CoreAlt -> ToCore SpecType
+altSType (_, _, e) = exprSType e
 
 fstMaybe :: Maybe a -> Maybe a -> Maybe a
 fstMaybe Nothing y = y
 fstMaybe x _       = x
 
-castInsertions :: Refinements -> [CoreBind] -> ToCore [CoreBind]
-castInsertions refts bs = mapM (castInsertionBind refts) bs
+castInsertions :: [CoreBind] -> ToCore [CoreBind]
+castInsertions bs = mapM castInsertionBind bs
 
-castInsertion :: Refinements -> CoreBind -> ToCore CoreBind
+castInsertion :: CoreBind -> ToCore CoreBind
 castInsertion = castInsertionBind
 
-castInsertionBind :: Refinements -> CoreBind -> ToCore CoreBind
-castInsertionBind refts (NonRec x expr) =
-  NonRec x <$> castInsertionExpr refts (lookupSType refts x) expr
-castInsertionBind refts (Rec bs) = Rec <$> mapM castInRec bs
+castInsertionBind :: CoreBind -> ToCore CoreBind
+castInsertionBind (NonRec x expr) = do
+  spec       <- lookupSType x
+  (expr', _) <- castInsertionExpr (Just spec) expr
+  pure $ NonRec x expr'
+castInsertionBind (Rec bs) = Rec <$> mapM castInRec bs
   where
     castInRec :: (CoreBndr, CoreExpr) -> ToCore (CoreBndr, CoreExpr)
-    castInRec ir@(bnd, _) = mapM (castInsertionExpr refts (lookupSType refts bnd)) ir
+    castInRec ir@(bnd, expr) = do
+      spec <- lookupSType bnd
+      (expr', _) <- castInsertionExpr (Just spec) expr
+      pure (bnd, expr')
 
-castInsertionExpr :: Refinements -> Maybe SpecType -> CoreExpr -> ToCore CoreExpr
-castInsertionExpr refts myr expr = case expr of
-  Var{} -> pure expr
-  Lit{} -> pure expr
-  App fun arg -> App <$> fun' <*> arg''
-    where
-      arg''     = if isGradual argReft then castedArg else arg'
-      funReft   = exprSType refts fun
-      argReft   = exprSType refts arg
-      fun'      = castInsertionExpr refts funReft fun
-      arg'      = castInsertionExpr refts argReft arg
-      castedArg = fromMaybe arg' $ do
-        fromR <- argReft
-        toR   <- funReft >>= dom
-        pure $ arg' >>= insertCast fromR toR
-  Lam x body -> Lam x <$> body'
-    where
-      fs = fmap (,x) $ mapMaybe mySymbol $ maybeToList myr
-      body' = withSubs fs $ castInsertionExpr refts (myr >>= cod) body
-  Let b e -> Let <$> b' <*> e'
-    where
-      b' = castInsertionBind refts b
-      e' = castInsertionExpr refts myr e
-  Case e x t alts -> Case <$> e' *>> x *>> t <*> alts'
-    where
-      eReft = exprSType refts e
-      e'    = castInsertionExpr refts eReft e
-      alts' = mapM (castInsertionAlt refts myr) alts
-  Cast e coer -> Cast <$> castInsertionExpr refts myr e *>> coer
-  Tick tick e -> Tick tick <$> castInsertionExpr refts myr e
-  Type{} -> pure expr
-  Coercion{} -> pure expr
+castInsertionExpr :: Maybe SpecType -> CoreExpr -> ToCore (CoreExpr, Maybe SpecType)
+castInsertionExpr myr expr = case expr of
+  Var x -> (expr,) <$> (Just <$> lookupSType x)
+  -- Lit l -> pure (expr, Just $ literalSpecType l)
+  Lit l -> pure (expr, myr)
+  App fun arg -> do
+    funReft   <- exprSType fun
+    argReft   <- exprSType arg
+    (fun', funSpec) <- castInsertionExpr (Just funReft) fun
+    (arg', argSpec) <- castInsertionExpr (Just argReft) arg
+    let parg = pure arg'
+    let castedArg = fromMaybe parg $ do
+          fromS <- argSpec
+          toS   <- funSpec >>= dom'
+          Just $ parg >>= insertCast fromS toS
+    arg'' <- if isGradual argReft then castedArg else parg
+    pure (App fun' arg'', funSpec >>= cod')
+  Lam x body -> do
+    let fs = fmap (,x) $ mapMaybe mySymbol $ maybeToList myr
+    (body', bodySpec) <- castInsertionExpr (myr >>= cod') body
+    body'' <- withSubs fs $ pure body'
+    spec   <- traverse (funSpecT x) bodySpec
+    pure (Lam x body'', spec)
+  Let b e -> do
+    b'          <- castInsertionBind b
+    (e', eSpec) <- castInsertionExpr myr e
+    pure (Let b' e', eSpec)
+  Case e x t alts -> do
+    (e', eSpec)       <- castInsertionExpr Nothing e
+    (alts', joinSpec) <- castInsertionAlts alts
+    pure (Case e' x t alts', joinSpec)
+  Cast e coer -> do
+    (e', eSpec) <- castInsertionExpr myr e
+    pure (Cast e' coer, eSpec)
+  Tick tick e -> do
+    (e', eSpec) <- castInsertionExpr myr e
+    pure (Tick tick e', eSpec)
+  Type{} -> pure (expr, Nothing)
+  Coercion{} -> pure (expr, Nothing)
 
-castInsertionAlt :: Refinements -> Maybe SpecType -> CoreAlt -> ToCore CoreAlt
-castInsertionAlt refts tgr (con, xs, e) = do
-    let myr = exprSType refts e
-    e'  <- castInsertionExpr refts myr e
-    let needed = any F.isGradual [myr, tgr]
-    e'' <- ifButNothing needed (insertCast <$> myr <*> tgr *>> e') $ pure e'
+funSpecT :: Var -> SpecType -> ToCore SpecType
+funSpecT x et = rFun (F.symbol x) <$> lookupSType x <*> pure et
+
+castInsertionAlts :: [CoreAlt] -> ToCore ([CoreAlt], Maybe SpecType)
+castInsertionAlts alts = do
+  let altExpr (_, _, e) = e
+  specs <- mapM (exprSType . altExpr) alts
+  joinSpec <- join specs
+  alts' <- mapM (castInsertionAlt joinSpec) alts
+  pure (alts', joinSpec)
+
+castInsertionAlt :: Maybe SpecType -> CoreAlt -> ToCore CoreAlt
+castInsertionAlt tgr (con, xs, e) = do
+    (e', eSpec)  <- castInsertionExpr Nothing e
+    let needed = any F.isGradual [eSpec, tgr]
+    e'' <- ifButNothing needed (insertCast <$> eSpec <*> tgr <*> pure e') $ pure e'
     pure (con, xs, e'')
 
-
+join :: [SpecType] -> ToCore (Maybe SpecType)
+join specs = pure $ headMaybe specs
 
 -- Helpers
 
@@ -300,3 +306,6 @@ ifButNothing _ Nothing y     = y
 ifButNothing False _ y       = y
 ifButNothing True (Just x) _ = x
 
+headMaybe :: [a] -> Maybe a
+headMaybe [] = Nothing
+headMaybe (x:_) = Just x

@@ -25,10 +25,12 @@ module Gradual.CastInsertion.Monad (
   insertSymSort,
   lookupLocalId,
   insertLocalId,
+  lookupSType,
   tyconFTycon,
   ftyconTycon,
   withCore,
-  withSubs
+  withSubs,
+  liftMaybe
   ) where
 
 import           Control.Monad.Reader
@@ -55,8 +57,9 @@ import           Var
 import           Language.Fixpoint.Types       (SEnv, Symbolic (..), emptySEnv, Sort,
                                                 insertSEnv, lookupSEnv, Symbol, TCEmb, FTycon,
                                                 fromListSEnv, unionSEnv')
-import           Language.Haskell.Liquid.Types ()
-import           Language.Haskell.Liquid.Constraint.Types (CGInfo (..))
+import           Language.Haskell.Liquid.Types (SpecType, REnv(..))
+import           Language.Haskell.Liquid.Constraint.Types (CGInfo (..), CGEnv (..), SubC (..))
+import           Language.Haskell.Liquid.Constraint.Env (lookupREnv, fromListREnv)
 
 newtype ToCore a = ToCore {
   unToCoreM :: ReaderT ToCoreInfo (StateT ToCoreState CoreM) a
@@ -70,6 +73,7 @@ data ToCoreState = ToCoreState {
 data ToCoreInfo = ToCoreInfo {
   to_core_ftycons :: M.HashMap FTycon TyCon,
   to_core_tycons :: M.HashMap TyCon FTycon,
+  to_core_specs :: REnv,
   to_core_cginfo :: CGInfo
   }
 
@@ -111,6 +115,10 @@ withSubs subs tc = do
 liftCore :: CoreM a -> ToCore a
 liftCore cm = ToCore $ ReaderT $ \_ ->  StateT $ \s -> (, s) <$> cm
 
+liftMaybe :: String -> Maybe a -> ToCore a
+liftMaybe msg Nothing = fail msg
+liftMaybe _ (Just x)  = pure x
+
 getHEnv :: ToCore HscEnv
 getHEnv = liftCore getHscEnv
 
@@ -124,13 +132,39 @@ tyConEnv :: ToCore (M.HashMap TyCon FTycon)
 tyConEnv = asks to_core_tycons
 
 defaultToCoreState :: ToCoreState
-defaultToCoreState = ToCoreState {to_core_ids = mempty,
+defaultToCoreState = ToCoreState {to_core_ids       = mempty,
                                   to_core_expr_sort = mempty}
 
 defaultToCoreInfo :: CGInfo -> ToCoreInfo
 defaultToCoreInfo cgi = ToCoreInfo {to_core_ftycons = mempty,
-                                    to_core_tycons = mempty,
-                                    to_core_cginfo = cgi}
+                                    to_core_tycons  = mempty,
+                                    to_core_specs   = initSpecs cgi,
+                                    to_core_cginfo  = cgi}
+
+initSpecs :: CGInfo -> REnv
+initSpecs cgi = fromListREnv globals locals
+  where
+    globals = renvs reGlobal
+    locals = renvs reLocal
+    renvs f = concat $ fmap (cgiToSpecs f) [renv, grtys]
+    toMaps f g = fmap (f . g . senv) . hsCs
+    cgiToSpecs f g = concat $ M.toList <$> toMaps f g cgi
+
+-- getSpecs :: CGInfo -> [(Symbol, SpecType)]
+-- getSpecs cg = concat $ localSpecs ++ globalSpecs
+--   where
+--     localSpecs = cgToSpecs reLocal
+--     globalSpecs = cgToSpecs reGlobal
+--     toMaps f = fmap (f . renv . senv) . hsCs
+--     cgToSpecs f = M.toList <$> toMaps f cg
+
+lookupSType :: Symbolic a => a -> ToCore SpecType
+lookupSType x = do
+  refts <- asks to_core_specs
+  case lookupREnv (symbol x) refts of
+    Nothing   -> fail $ "Identifier " ++ show (symbol x) ++ " not in scope."
+    Just spec -> pure spec
+
 
 insertSymSort :: Symbolic a => a -> Sort -> ToCore ()
 insertSymSort name idx =

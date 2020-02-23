@@ -42,7 +42,8 @@ import           Language.Fixpoint.Solver
 -- import           Language.Fixpoint.Solver.GradualSolve (solveGradual)
 import qualified Language.Fixpoint.Types as F
 import           Language.Haskell.Liquid.Types hiding (binds)
-import           Language.Haskell.Liquid.Types.RefType (applySolution, applySolutionIgnoringG)
+import           Language.Haskell.Liquid.Types.RefType (applySolution)
+-- import           Language.Haskell.Liquid.Types.RefType (applySolution, applySolutionIgnoringG)
 import           Language.Haskell.Liquid.UX.Errors
 import           Language.Haskell.Liquid.UX.CmdLine
 import           Language.Haskell.Liquid.UX.Tidy
@@ -78,12 +79,11 @@ liquidConstraints cfg = do
 castCore :: CGInfo -> IO CGInfo
 castCore cgi = do
   let gi = ghcI cgi
-  let cfg = getConfig gi
-  let tgt = target gi
-  let specs = getSpecs cgi
-  solvedSpecs <- solveSpecs cfg tgt cgi gi specs
+  -- let cfg = getConfig gi
+  -- let tgt = target gi
+  -- let specs = getSpecs cgi
+  -- solvedSpecs <- solveSpecs cfg tgt cgi gi specs
   -- let sreftMap = toRefMap solvedSpecs
-  let specMap = F.fromListSEnv solvedSpecs
   let hscEnv = env gi
   let rules = emptyRuleBase
   uniq <- mkSplitUniqSupply 'c'
@@ -93,7 +93,7 @@ castCore cgi = do
   let printUnq = alwaysQualify
   let srcSpan = noSrcSpan
   let tcemb = gsTcEmbeds $ spec gi
-  let castedCore = castInsertions specMap (cbs gi)
+  let castedCore = castInsertions (cbs gi)
   (newCore, _) <- runToCore hscEnv rules uniq mod modSet printUnq srcSpan cgi tcemb castedCore
   let cgi' = cgi {ghcI = gi {cbs = newCore}}
 
@@ -103,13 +103,13 @@ castCore cgi = do
 
   return $ cgi'
 
-solveSpecs :: Config -> FilePath -> CGInfo -> GhcInfo -> [(F.Symbol, SpecType)] -> IO [(F.Symbol, SpecType)]
-solveSpecs cfg tgt cgi info specs = do
-  finfo               <- cgInfoFInfo info cgi
-  F.Result _ sol _ <- solve (fixConfig tgt cfg) finfo
-  let applySolTuple    = uncurry zip . fmap (applySolutionIgnoringG sol) . unzip
-  let resK             = applySolTuple specs
-  return resK
+-- solveSpecs :: Config -> FilePath -> CGInfo -> GhcInfo -> [(F.Symbol, SpecType)] -> IO [(F.Symbol, SpecType)]
+-- solveSpecs cfg tgt cgi info specs = do
+--   finfo               <- cgInfoFInfo info cgi
+--   F.Result _ sol _ <- solve (fixConfig tgt cfg) finfo
+--   let applySolTuple    = uncurry zip . fmap (applySolutionIgnoringG sol) . unzip
+--   let resK             = applySolTuple specs
+--   return resK
 
 --------------------------------------------------------------------------------
 -- | This fellow does the real work
