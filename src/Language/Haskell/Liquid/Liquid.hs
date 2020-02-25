@@ -16,9 +16,11 @@ module Language.Haskell.Liquid.Liquid (
 
    -- * Liquid Constraint Generation 
   , liquidConstraints
+  , liquidConstraintsG
   ) where
 
 import           Data.Bifunctor
+-- import qualified Data.HashMap.Strict as M
 import           Prelude hiding (error)
 import           System.Exit
 import           UniqSupply       (mkSplitUniqSupply)
@@ -64,8 +66,8 @@ liquid :: [String] -> IO b
 --------------------------------------------------------------------------------
 liquid args = getOpts args >>= runLiquid Nothing >>= exitWith . fst
 
-liquidConstraints :: Config -> IO (Either [CGInfo] ExitCode) 
-liquidConstraints cfg = do 
+liquidConstraintsG :: Config -> IO (Either [CGInfo] ExitCode) 
+liquidConstraintsG cfg = do 
   z <- actOrDie $ second Just <$> getGhcInfos Nothing cfg (files cfg)
   case z of
     Left e -> do
@@ -75,6 +77,17 @@ liquidConstraints cfg = do
       let cgs = map generateConstraints gs
       cgs' <- sequenceA $ castCore <$> cgs
       return $ Left cgs'
+
+liquidConstraints :: Config -> IO (Either [CGInfo] ExitCode) 
+liquidConstraints cfg = do 
+  z <- actOrDie $ second Just <$> getGhcInfos Nothing cfg (files cfg)
+  case z of
+    Left e -> do
+      exitWithResult cfg (files cfg) $ mempty { o_result = e }
+      return $ Right $ resultExit e
+    Right (gs, _) -> do
+      let cgs = map generateConstraints gs
+      return $ Left cgs
 
 castCore :: CGInfo -> IO CGInfo
 castCore cgi = do
@@ -94,6 +107,7 @@ castCore cgi = do
   let srcSpan = noSrcSpan
   let tcemb = gsTcEmbeds $ spec gi
   let castedCore = castInsertions (cbs gi)
+  -- dumpCs cgi
   (newCore, _) <- runToCore hscEnv rules uniq mod modSet printUnq srcSpan cgi tcemb castedCore
   let cgi' = cgi {ghcI = gi {cbs = newCore}}
 
@@ -102,6 +116,13 @@ castCore cgi = do
                   -- dumpCs cgi'
 
   return $ cgi'
+
+-- getAnnDef :: AnnInfo (Annot a) -> AnnInfo (Annot a)
+-- getAnnDef (AI hm) = AI $ fmap (filter (\(_, a) -> isAnnDef a)) hm
+
+-- isAnnDef :: Annot a -> Bool
+-- isAnnDef AnnDef {} = True
+-- isAnnDef _          = False
 
 -- solveSpecs :: Config -> FilePath -> CGInfo -> GhcInfo -> [(F.Symbol, SpecType)] -> IO [(F.Symbol, SpecType)]
 -- solveSpecs cfg tgt cgi info specs = do
@@ -223,16 +244,16 @@ dumpCs :: CGInfo -> IO ()
 dumpCs cgi = do
   putStrLn "***************************** SubCs *******************************"
   putStrLn $ render $ pprintMany (hsCs cgi)
-  putStrLn "***************************** FixCs *******************************"
-  putStrLn $ render $ pprintMany (fixCs cgi)
-  putStrLn "***************************** WfCs ********************************"
-  putStrLn $ render $ pprintMany (hsWfs cgi)
+  -- putStrLn "***************************** FixCs *******************************"
+  -- putStrLn $ render $ pprintMany (fixCs cgi)
+  -- putStrLn "***************************** WfCs ********************************"
+  -- putStrLn $ render $ pprintMany (hsWfs cgi)
 
 pprintMany :: (PPrint a) => [a] -> Doc
 pprintMany xs = vcat [ F.pprint x $+$ text " " | x <- xs ]
 
-instance Show Cinfo where
-  show = show . F.toFix
+-- instance Show Cinfo where
+--   show = show . F.toFix
 
 solveCs :: Config -> FilePath -> CGInfo -> GhcInfo -> Maybe [String] -> IO (Output Doc)
 solveCs cfg tgt cgi info names = do

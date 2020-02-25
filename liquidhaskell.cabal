@@ -83,6 +83,27 @@ Executable liquid
     ghc-options: -Werror
   Default-Extensions: PatternGuards
 
+
+executable gradualdyn
+  default-language: Haskell2010
+  main-is:        src/GradualDyn.hs
+  ghc-options: -W -threaded
+  if flag(devel)
+    ghc-options: -Werror
+  Build-Depends: base >=4.8.1.0 && <5
+               , ghc
+               , ghc-boot
+               , cmdargs
+               , time
+               , deepseq
+               , pretty
+               , process
+               , liquid-fixpoint >= 0.7.0.5
+               , located-base
+               , liquidhaskell
+               , hpc >= 0.6
+               , hscolour
+
 executable gradual
   default-language: Haskell2010
   main-is:        src/Gradual.hs
