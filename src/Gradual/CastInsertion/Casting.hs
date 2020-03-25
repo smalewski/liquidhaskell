@@ -9,7 +9,8 @@
 
 module Gradual.CastInsertion.Casting (
   castInsertion,
-  castInsertions
+  castInsertions,
+  castCore
   ) where
 
 import           Debug.Trace
@@ -21,13 +22,16 @@ import           Data.Maybe                               (fromMaybe, mapMaybe, 
 import           FastString
 import           Id
 import           MkCore
-import           Module                                   (moduleName)
+import           Module                                   (moduleName, emptyModuleSet)
 import           Name
 import           SrcLoc                                   (noSrcSpan)
 import           Type                                     hiding (isFunTy)
 import           TysWiredIn
 import           UniqSupply
 import           Unique
+import           HscTypes
+import           Outputable (alwaysQualify)
+import           Rules (emptyRuleBase)
 
 import           Gradual.CastInsertion.ExprToCore
 import           Gradual.CastInsertion.Monad
@@ -68,15 +72,20 @@ dom' (RAllT _ s) = dom' s
 dom' (RAllP _ s) = dom' s
 dom' (RAllS _ s) = dom' s
 dom' (RAllE _ _ s) = dom' s
+dom' (RAppTy arg _ _) = Just arg
+dom' s@(RVar x r) = Just s
 dom' _              = Nothing
 
 cod' :: SpecType -> Maybe SpecType
 cod' (RFun _ _ o _) = Just o
-cod' (RAllT _ s) = cod' s
+cod' (RAllT _ s) = Just s
 cod' (RAllP _ s) = cod' s
 cod' (RAllS _ s) = cod' s
 cod' (RAllE _ _ s) = cod' s
-cod' _              = Nothing
+cod' (RAppTy _ res _) = Just res
+cod' s@(RVar x r) = Just s
+cod' (RHole _) = Nothing
+cod' _         = Nothing
 
 dom :: SpecType -> ToCore SpecType
 dom = liftMaybe "dom is not defined for non function types." . dom'
@@ -87,16 +96,16 @@ cod = liftMaybe "cod is not defined for non function types." . cod'
 insertCast :: SpecType -> SpecType -> CoreExpr -> ToCore CoreExpr
 insertCast myr tgr expr
   | isFunTy myr = expandCast myr tgr expr
-  | otherwise   = castedExpr
+  | otherwise   = if isTrivial utgr && not (isGradual myr) then pure expr else castedExpr
   -- = do ok <- checkSub myr tgr   -- myr <: tgr
   --      if ok
   --        then pure expr
   --        else castedExpr
   where
-    reft = rTypeReft $ ungrad tgr
+    utgr = ungrad tgr
+    reft = rTypeReft utgr
     checkExpr v = mkIfThenElse <$> specToCore tgr v <*> pure (Var v) <*> pure errExpr
     castedExpr = do
-      printMsg "CASTEANDO"
       v <- freshId "v" ty
       bindNonRec v expr <$> checkExpr v
     errExpr = mkRuntimeErrorApp rUNTIME_ERROR_ID ty errMsg
@@ -111,17 +120,22 @@ expandCast myr tgr e = do
   let fs = (,y) <$> mapMaybe mySymbol [myr, tgr]
   let ey = mkCoreApps e [Var y]
   xCast <- insertCast <$> dom tgr <*> dom myr <*> pure (Var x)
-  eyCast <- withSubs fs $ insertCast <$> cod myr <*> cod tgr <*> pure ey
+  eyCast <- withSubs fs [] $ insertCast <$> cod myr <*> cod tgr <*> pure ey
   body <- bindNonRec y <$> xCast <*> eyCast
   pure $ mkCoreLams [x] body
 
 mySymbol :: SpecType -> Maybe Symbol
+mySymbol (RVar x _) = Just $ F.symbol x
 mySymbol (RFun x _ _ _) = Just x
-mySymbol (RAllT _ t) = mySymbol t
-mySymbol (RAllP _ t) = mySymbol t
-mySymbol (RAllS _ t) = mySymbol t
-mySymbol (RAllE _ _ t) = mySymbol t
+mySymbol (RAllP pv _) = Just (pname pv)
+mySymbol (RAllT rtv _) =
+  let b = fst <$> rTVarToBind rtv
+  in Just $ fromMaybe (F.symbol ("_" :: String)) b
+mySymbol (RAllS s _) = Just s
+mySymbol (RAllE s _ _) = Just s
 mySymbol (REx _ _ t) = mySymbol t
+mySymbol (RAppTy _ _ p) = Just . F.reftBind . ur_reft $ p
+mySymbol (RApp _ _ _ r) = Just . F.reftBind . ur_reft $ r
 mySymbol _          = Nothing
 
 exprSType :: CoreExpr -> ToCore SpecType
@@ -165,6 +179,10 @@ castInRec ir@(bnd, expr) = do
   (expr', _) <- castInsertionExpr (Just spec) expr
   pure (bnd, expr')
 
+isClassDict :: CoreExpr -> Bool
+isClassDict (Var x) = take 2 (getOccString x) == "$f"
+isClassDict _       = False
+
 castInsertionExpr :: Maybe SpecType -> CoreExpr -> ToCore (CoreExpr, Maybe SpecType)
 castInsertionExpr myr expr = case expr of
   Var x -> (expr,) <$> (Just <$> lookupSType x)
@@ -173,9 +191,10 @@ castInsertionExpr myr expr = case expr of
   App fun arg -> do
     funReft   <- exprSType fun
     argReft   <- exprSType arg
-    -- let as = fmap (,x) $ mapMaybe mySymbol $ maybeToList myr
-    (fun', funSpec) <- castInsertionExpr (Just funReft) fun
     (arg', argSpec) <- castInsertionExpr (Just argReft) arg
+    funDomSym <- liftMaybe "not fun" $ mySymbol funReft
+    let fs = [(funDomSym, arg)]
+    (fun', funSpec) <- withSubs [] fs $ castInsertionExpr (Just funReft) fun
     let parg = pure arg'
     let castedArg = fromMaybe parg $ do
           fromS <- argSpec
@@ -186,7 +205,7 @@ castInsertionExpr myr expr = case expr of
   Lam x body -> do
     let fs = fmap (,x) $ mapMaybe mySymbol $ maybeToList myr
     (body', bodySpec) <- castInsertionExpr (myr >>= cod') body
-    body'' <- withSubs fs $ pure body'
+    body'' <- withSubs fs [] $ pure body'
     spec   <- traverse (funSpecT x) bodySpec
     pure (Lam x body'', spec)
   Let b e -> do
@@ -209,6 +228,10 @@ castInsertionExpr myr expr = case expr of
 funSpecT :: Var -> SpecType -> ToCore SpecType
 funSpecT x et = rFun (F.symbol x) <$> lookupSType x <*> pure et
 
+instance Show CoreBind where
+  show (NonRec x _) = "NonRec " ++ show x
+  show (Rec xs) = "Rec " ++ show (fmap fst xs)
+
 castInsertionAlts :: [CoreAlt] -> ToCore ([CoreAlt], Maybe SpecType)
 castInsertionAlts alts = do
   let altExpr (_, _, e) = e
@@ -227,12 +250,6 @@ castInsertionAlt tgr (con, xs, e) = do
 join :: [SpecType] -> ToCore (Maybe SpecType)
 join specs = pure $ headMaybe specs
 
--- Helpers
-
-infixl 4 *>>
-(*>>) :: Applicative f => f (a -> b) -> a -> f b
-f *>> x = f <*> pure x
-
 ifButNothing :: Bool -> Maybe a -> a -> a
 ifButNothing _ Nothing y     = y
 ifButNothing False _ y       = y
@@ -241,3 +258,26 @@ ifButNothing True (Just x) _ = x
 headMaybe :: [a] -> Maybe a
 headMaybe [] = Nothing
 headMaybe (x:_) = Just x
+
+castCore :: CGInfo -> ModGuts -> IO (CGInfo, ModGuts)
+castCore cgi modGuts= do
+  let gi = ghcI cgi
+  let hscEnv = env gi
+  let rules = emptyRuleBase
+  uniq <- mkSplitUniqSupply 'c'
+  let printUnq = alwaysQualify
+  let mod     = mg_module modGuts
+  let modSet = emptyModuleSet
+  let srcSpan = mg_loc modGuts
+  let cbs     = mg_binds modGuts
+
+  let tcemb = gsTcEmbeds $ spec gi
+
+  let castedCore = castInsertions cbs
+  (newCore, _) <- runToCore hscEnv rules uniq mod modSet printUnq srcSpan cgi tcemb castedCore
+  -- putStrLn "AFTER"
+  putStrLn $ showCBs False newCore
+  let cgi' = cgi {ghcI = gi {cbs = newCore}}
+  let modGuts' = modGuts {mg_binds = newCore}
+
+  return (cgi', modGuts')

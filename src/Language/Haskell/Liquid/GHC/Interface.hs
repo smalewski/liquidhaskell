@@ -110,9 +110,9 @@ getGhcInfos' cfg logicMap tgtFiles = do
   _           <- compileCFiles cfg
   homeModules <- configureGhcTargets tgtFiles
   depGraph    <- buildDepGraph homeModules
-  ghcInfos    <- processModules cfg logicMap tgtFiles depGraph homeModules
+  infos       <- processModules cfg logicMap tgtFiles depGraph homeModules
   hscEnv      <- getSession
-  return (ghcInfos, hscEnv)
+  return (infos, hscEnv)
 
 createTempDirectoryIfMissing :: FilePath -> IO ()
 createTempDirectoryIfMissing tgtFile = tryIgnore "create temp directory" $
@@ -351,7 +351,7 @@ loadModule' tm = loadModule tm'
 processTargetModule :: Config -> Either Error LogicMap -> DepGraph
                     -> SpecEnv
                     -> FilePath -> TypecheckedModule -> Ms.BareSpec
-                    -> Ghc GhcInfo
+                    -> Ghc (GhcInfo)
 processTargetModule cfg0 logicMap depGraph specEnv file typechecked bareSpec = do
   cfg               <- liftIO $ withPragmas cfg0 file $ Ms.pragmas bareSpec
   let modSummary     = pm_mod_summary $ tm_parsed_module typechecked
@@ -378,19 +378,20 @@ processTargetModule cfg0 logicMap depGraph specEnv file typechecked bareSpec = d
   (spc, imps, incs) <- toGhcSpec cfg file coreBinds (impVs ++ defVs) letVs modName modGuts bareSpec logicMap impSpecs
   _                 <- liftIO $ whenLoud $ putStrLn $ "Module Imports: " ++ show imps
   hqualsFiles       <- moduleHquals modGuts paths file imps incs
-  return GI { target    = file
-            , targetMod = moduleName mod
-            , env       = hscEnv
-            , cbs       = coreBinds
-            , derVars   = derVs
-            , impVars   = impVs
-            , defVars   = letVs ++ dataCons
-            , useVars   = useVs
-            , hqFiles   = hqualsFiles
-            , imports   = imps
-            , includes  = incs
-            , spec      = spc
-            }
+  let ghci = GI { target    = file
+                , targetMod = moduleName mod
+                , env       = hscEnv
+                , cbs       = coreBinds
+                , derVars   = derVs
+                , impVars   = impVs
+                , defVars   = letVs ++ dataCons
+                , useVars   = useVs
+                , hqFiles   = hqualsFiles
+                , imports   = imps
+                , includes  = incs
+                , spec      = spc
+                }
+  pure ghci
 
 toGhcSpec :: GhcMonad m
           => Config

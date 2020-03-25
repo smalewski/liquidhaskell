@@ -4,7 +4,6 @@ module Gradual.CastInsertion.ExprToCore where
 --   exprToCore,
 --   ) where
 
-import           Debug.Trace                         (trace)
 import           Control.Monad.State
 import           CoreSyn                             hiding (Expr)
 import           CoreUtils
@@ -59,7 +58,7 @@ exprToCore (ECon c) =
     I n     -> mkIntegerExpr n
     R x     -> pure $ mkDoubleExpr x
     L str _ -> mkStringExpr $ unpack str -- FIXME
-exprToCore (EVar x) = Var <$> lookupTCId x
+exprToCore (EVar x) = lookupVar x
 exprToCore (EApp e1 e2) = appToCore e1 e2
 exprToCore (ENeg e) = negToCore e
 exprToCore (EBin op e1 e2) = binToCore op e1 e2
@@ -84,7 +83,7 @@ appToCore e1 e2 = mkCoreApps <$> (exprToCore e1) <*> sequence [exprToCore e2]
 
 negToCore :: Expr -> ToCore CoreExpr
 negToCore e = do
-  negId <- lookupTCId "GHC.Classes.not"
+  negId <- lookupTCId "GHC.Integer.Type.negInteger"
   ce <- exprToCore e
   pure $ mkCoreApps (Var negId) [ce]
 
@@ -220,7 +219,8 @@ relId Eq s
   | F.isNumeric s = lookupId eqIntegerPrimName
   | F.isReal s = lookupId eqName
   | F.isString s = lookupId eqStringName
-  | otherwise = lookupId eqTyConName
+  -- | otherwise = lookupId eqTyConName
+  | otherwise = lookupId eqIntegerPrimName
 relId Ne s
   | F.isNumeric s = lookupId neqIntegerPrimName
   | otherwise     = lookupTCId "/="
@@ -229,34 +229,64 @@ relId Gt s
   | otherwise     = lookupTCId ">"
 relId Ge s
   | F.isNumeric s = lookupId geIntegerPrimName
-  | otherwise     = lookupId geName
+  | otherwise     = lookupTCId ">="
 relId Lt s
   | F.isNumeric s = lookupId ltIntegerPrimName
   | otherwise     = lookupTCId "<"
 relId Le s
   | F.isNumeric s = lookupId leIntegerPrimName
   | otherwise     = lookupTCId "<="
-relId Ueq s = lookupId eqTyConName
-relId Une s = lookupId eqTyConName -- FIXME
+relId Ueq s = relId Eq s
+relId Une s = relId Ne s
+
+relDict :: Brel -> F.Sort -> String
+relDict rel FInt
+  | isEq rel  = intEqClass
+  | otherwise = intOrdClass
+relDict rel FReal
+  | isEq rel  = doubleEqClass
+  | otherwise = doubleOrdClass
+
+isEq :: Brel -> Bool
+isEq rel = elem rel [Eq, Ne, Ueq, Une]
+
+bopDict :: Bop -> F.Sort -> String
+bopDict _ FInt  = intNumClass
+bopDict _ FReal = doubleNumClass
+
+intEqClass, intOrdClass, intNumClass :: String
+doubleEqClass, doubleOrdClass, doubleNumClass :: String
+intEqClass     = "GHC.Integer.Type.$fEqInteger"
+intOrdClass    = "GHC.Integer.Type.$fOrdInteger"
+intNumClass    = "GHC.Num.$fNumInteger"
+doubleEqClass  = "GHC.Classes.$fEqDouble"
+doubleOrdClass = "GHC.Classes.$fOrdDouble"
+doubleNumClass = "GHC.Float.$fNumDouble"
 
 opId :: Bop -> F.Sort -> ToCore Id
 opId Plus s
   | F.isNumeric s = lookupId plusIntegerName
-  | otherwise      = lookupTCId "GHC.Num.+"
+  -- | otherwise      = lookupTCId "GHC.Num.+"
+  | otherwise      = lookupId plusIntegerName
 opId Minus s
   | F.isNumeric s = lookupId minusIntegerName
-  | otherwise     = lookupId minusName
+  -- | otherwise     = lookupId minusName
+  | otherwise     = lookupId minusIntegerName
 opId Times s
   | F.isNumeric s = lookupId timesIntegerName
-  | otherwise     = lookupTCId "GHC.Num.*"
+  -- | otherwise     = lookupTCId "GHC.Num.*"
+  | otherwise     = lookupId timesIntegerName
 opId Div s
   | F.isNumeric s = lookupId divIntegerName
-  | otherwise     = lookupTCId "GHC.Num./"
+  -- | otherwise     = lookupTCId "GHC.Num./"
+  | otherwise     = lookupId divIntegerName
 opId Mod s
   | F.isNumeric s = lookupId modIntegerName
-  | otherwise     = lookupTCId "GHC.Num.mod"
-opId RTimes s     = lookupTCId "GHC.Num.*"
-opId RDiv s       = lookupTCId "GHC.Num./"
+  -- | otherwise     = lookupTCId "GHC.Num.mod"
+  | otherwise     = lookupId modIntegerName
+opId RTimes _     = lookupTCId timesIntegerName
+-- opId RTimes s     = lookupTCId "GHC.Num.*"
+opId RDiv _       = lookupTCId "GHC.Num./"
 
 lookupTCName :: F.Symbolic a => a -> ToCore Name
 lookupTCName s = do
@@ -268,7 +298,6 @@ lookupTCName s = do
   let sym = F.symbol s
   let locsym = F.dummyLoc sym
   names <- liftIO $ lookupName hscEnv modName namespace locsym
-  printMsg $ show names
   case nubHashOn showpp names of
     [x] -> pure x
     _   -> error $  "Multiple names for " ++ show (F.symbol s)
@@ -281,7 +310,13 @@ lookupTCId s = do
     Nothing -> lookupTCName s >>= lookupId
     Just idx -> pure idx
 
+lookupVar :: F.Symbolic a => a -> ToCore CoreExpr
+lookupVar s = lookupVar' s >>= liftMaybe ("Can't find " ++ (show . F.symbol) s ++ " in scope.")
 
-
-
+lookupVar' :: F.Symbolic a => a -> ToCore (Maybe CoreExpr)
+lookupVar' name = do
+  mId <- lookupLocalId name
+  case mId of
+    Just idx -> pure $ Just $ Var idx
+    Nothing  -> lookupLocalExpr name
 

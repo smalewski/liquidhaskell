@@ -22,6 +22,7 @@ import           Language.Haskell.Liquid.Bare.Expand
 import           Language.Haskell.Liquid.Bare.OfType
 import           Language.Haskell.Liquid.Bare.Resolve
 
+
 --------------------------------------------------------------------------------
 -- | `makeRTEnv` initializes the env needed to `expand` refinements and types,
 --   that is, the below needs to be called *before* we use `Expand.expand`

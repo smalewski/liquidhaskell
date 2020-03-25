@@ -16,26 +16,19 @@ module Language.Haskell.Liquid.Liquid (
 
    -- * Liquid Constraint Generation 
   , liquidConstraints
-  , liquidConstraintsG
   ) where
 
 import           Data.Bifunctor
 -- import qualified Data.HashMap.Strict as M
 import           Prelude hiding (error)
 import           System.Exit
-import           UniqSupply       (mkSplitUniqSupply)
-import           SrcLoc
-import           Module
 import           Text.PrettyPrint.HughesPJ
 import           CoreSyn
-import           Outputable (alwaysQualify)
-import           Rules (emptyRuleBase)
 import           HscTypes (SourceError)
 import           GHC (HscEnv)
 import           System.Console.CmdArgs.Verbosity (whenLoud, whenNormal)
 import           Control.Monad (when)
 import qualified Control.Exception as Ex
-import           Gradual.CastInsertion
 -- import qualified Language.Fixpoint.Types.Config as FC
 import qualified Language.Haskell.Liquid.UX.DiffCheck as DC
 import           Language.Haskell.Liquid.Misc
@@ -66,18 +59,6 @@ liquid :: [String] -> IO b
 --------------------------------------------------------------------------------
 liquid args = getOpts args >>= runLiquid Nothing >>= exitWith . fst
 
-liquidConstraintsG :: Config -> IO (Either [CGInfo] ExitCode) 
-liquidConstraintsG cfg = do 
-  z <- actOrDie $ second Just <$> getGhcInfos Nothing cfg (files cfg)
-  case z of
-    Left e -> do
-      exitWithResult cfg (files cfg) $ mempty { o_result = e }
-      return $ Right $ resultExit e
-    Right (gs, _) -> do
-      let cgs = map generateConstraints gs
-      cgs' <- sequenceA $ castCore <$> cgs
-      return $ Left cgs'
-
 liquidConstraints :: Config -> IO (Either [CGInfo] ExitCode) 
 liquidConstraints cfg = do 
   z <- actOrDie $ second Just <$> getGhcInfos Nothing cfg (files cfg)
@@ -88,49 +69,6 @@ liquidConstraints cfg = do
     Right (gs, _) -> do
       let cgs = map generateConstraints gs
       return $ Left cgs
-
-castCore :: CGInfo -> IO CGInfo
-castCore cgi = do
-  let gi = ghcI cgi
-  -- let cfg = getConfig gi
-  -- let tgt = target gi
-  -- let specs = getSpecs cgi
-  -- solvedSpecs <- solveSpecs cfg tgt cgi gi specs
-  -- let sreftMap = toRefMap solvedSpecs
-  let hscEnv = env gi
-  let rules = emptyRuleBase
-  uniq <- mkSplitUniqSupply 'c'
-  let moduleName = targetMod gi
-  let mod =  mkModule (stringToUnitId $ moduleNameString moduleName) moduleName
-  let modSet = mkModuleSet [mod]
-  let printUnq = alwaysQualify
-  let srcSpan = noSrcSpan
-  let tcemb = gsTcEmbeds $ spec gi
-  let castedCore = castInsertions (cbs gi)
-  -- dumpCs cgi
-  (newCore, _) <- runToCore hscEnv rules uniq mod modSet printUnq srcSpan cgi tcemb castedCore
-  let cgi' = cgi {ghcI = gi {cbs = newCore}}
-
-  whenNormal $ do donePhase Loud "Casts inserted"
-                  print $ ghcI cgi'
-                  -- dumpCs cgi'
-
-  return $ cgi'
-
--- getAnnDef :: AnnInfo (Annot a) -> AnnInfo (Annot a)
--- getAnnDef (AI hm) = AI $ fmap (filter (\(_, a) -> isAnnDef a)) hm
-
--- isAnnDef :: Annot a -> Bool
--- isAnnDef AnnDef {} = True
--- isAnnDef _          = False
-
--- solveSpecs :: Config -> FilePath -> CGInfo -> GhcInfo -> [(F.Symbol, SpecType)] -> IO [(F.Symbol, SpecType)]
--- solveSpecs cfg tgt cgi info specs = do
---   finfo               <- cgInfoFInfo info cgi
---   F.Result _ sol _ <- solve (fixConfig tgt cfg) finfo
---   let applySolTuple    = uncurry zip . fmap (applySolutionIgnoringG sol) . unzip
---   let resK             = applySolTuple specs
---   return resK
 
 --------------------------------------------------------------------------------
 -- | This fellow does the real work
@@ -252,8 +190,8 @@ dumpCs cgi = do
 pprintMany :: (PPrint a) => [a] -> Doc
 pprintMany xs = vcat [ F.pprint x $+$ text " " | x <- xs ]
 
--- instance Show Cinfo where
---   show = show . F.toFix
+instance Show Cinfo where
+  show = show . F.toFix
 
 solveCs :: Config -> FilePath -> CGInfo -> GhcInfo -> Maybe [String] -> IO (Output Doc)
 solveCs cfg tgt cgi info names = do
@@ -263,7 +201,6 @@ solveCs cfg tgt cgi info names = do
   resModel_        <- fmap (e2u sol) <$> getModels info cfg resErr
   let resModel      = resModel_  `addErrors` (e2u sol <$> logErrors cgi)
   let out0          = mkOutput cfg resModel sol (annotMap cgi)
-  _ <- castCore cgi
   return            $ out0 { o_vars    = names    }
                            { o_result  = resModel }
 

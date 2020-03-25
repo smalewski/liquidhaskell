@@ -47,7 +47,6 @@ import           Language.Haskell.Liquid.Misc     (nubHashOn)
 import           Language.Haskell.Liquid.Types
 import           Language.Haskell.Liquid.Bare.Env
 
--- import Debug.Trace (trace)
 
 --------------------------------------------------------------------------------
 -- | Querying GHC for Id, Type, Class, Con etc. --------------------------------
@@ -106,7 +105,7 @@ symbolLookup env mod ns k
   = symbolLookupEnv env mod ns k
 
 wiredIn      :: M.HashMap F.Symbol Name
-wiredIn      = M.fromList $ special ++ wiredIns ++ wiredIns' ++ wiredTyCons ++ wiredDcCons
+wiredIn      = M.fromList $ special ++ wiredIns ++ wiredIns' ++ wiredTyCons ++ wiredDcCons ++ aliases
   where
     wiredIns  = [ (F.symbol n, n) | thing <- (wiredInIds ++ ghcPrimIds) {- NV CHECK -}, let n = getName thing ]
     wiredIns' = [ (F.symbol n, n) | n <- (genericTyConNames ++ basicKnownKeyNames)]
@@ -119,6 +118,11 @@ wiredIn      = M.fromList $ special ++ wiredIns ++ wiredIns' ++ wiredTyCons ++ w
     special   = [ ("GHC.Integer.smallInteger", smallIntegerName)
                 , ("GHC.Integer.Type.Integer", integerTyConName)
                 , ("GHC.Num.fromInteger"     , fromIntegerName ) ]
+    aliases   = [ ("Bool", boolTyConName)
+                , ("Int", intTyConName)
+                , ("Char", charTyConName)
+                , ("Integer", integerTyConName)
+                ]
 
 symbolLookupEnv :: HscEnv -> ModName -> Maybe NameSpace -> F.Symbol -> IO [Name]
 symbolLookupEnv env mod ns k = do
@@ -209,7 +213,6 @@ lookupGhcTyCon src s = do
   lookupGhcThing err ftc (Just tcName) s  `catchError` \_ ->
    lookupGhcThing err fdc (Just tcName) s
   where
-    -- s = trace ("lookupGhcTyCon: " ++ symbolicString _s) _s
     ftc (ATyCon x)
       = Just x
     ftc _

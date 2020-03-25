@@ -25,6 +25,7 @@ module Gradual.CastInsertion.Monad (
   insertSymSort,
   lookupLocalId,
   insertLocalId,
+  lookupLocalExpr,
   lookupSType,
   tyconFTycon,
   ftyconTycon,
@@ -33,7 +34,8 @@ module Gradual.CastInsertion.Monad (
   withTopVar,
   liftMaybe,
   checkSub,
-  compareSpecTypes
+  compareSpecTypes,
+  printEnv
   ) where
 
 import           Control.Monad.Reader
@@ -41,7 +43,7 @@ import           Control.Monad.Reader
 import           Control.Monad.State.Lazy
 import           CoreMonad                     (CoreM, SimplCount, errorMsgS,
                                                 getHscEnv, putMsgS, runCoreM)
-import           CoreSyn (RuleBase)
+import           CoreSyn (RuleBase, CoreExpr)
 import qualified Data.HashMap.Strict as M
 import           Debug.Trace
 import           DynFlags (HasDynFlags (..))
@@ -64,7 +66,7 @@ import           Language.Fixpoint.Types hiding (SubC, SrcSpan, senv)
 import qualified Language.Fixpoint.Types.Config as F
 import           Language.Haskell.Liquid.Types
 import           Language.Haskell.Liquid.Constraint.Types (CGInfo (..), CGEnv (..), SubC (..), FixSubC, CG (..))
-import           Language.Haskell.Liquid.Constraint.Env (lookupREnv, fromListREnv)
+import           Language.Haskell.Liquid.Constraint.Env (insertREnv, lookupREnv, fromListREnv)
 import           Language.Haskell.Liquid.Constraint.Init (initEnv)
 import           Language.Haskell.Liquid.Constraint.Split (splitC)
 import           Language.Haskell.Liquid.Constraint.ToFixpoint (cgInfoFInfo, fixConfig)
@@ -75,6 +77,7 @@ newtype ToCore a = ToCore {
 
 data ToCoreState
   = ToCoreState { to_core_ids :: SEnv Id
+                , to_core_exprs :: SEnv CoreExpr
                 , to_core_expr_sort :: SEnv Sort
                 , to_core_tl_var :: Maybe Var
                 , to_core_cginfo :: CGInfo
@@ -120,12 +123,15 @@ updateTopVar x s = s {to_core_tl_var = Just x}
 withCore :: (ToCoreState -> ToCoreState) -> ToCore a -> ToCore a
 withCore f tc = ToCore $ ReaderT $ \r -> withStateT f $ flip runReaderT r $ unToCoreM tc
 
-withSubs :: [(Symbol, Id)] -> ToCore a -> ToCore a
-withSubs subs tc = do
+withSubs :: [(Symbol, Id)] -> [(Symbol, CoreExpr)] -> ToCore a -> ToCore a
+withSubs subIds subExprs tc = do
   ids <- gets to_core_ids
-  let ids' = fromListSEnv subs
+  exprs <- gets to_core_exprs
+  let ids' = fromListSEnv subIds
+  let exprs' = fromListSEnv subExprs
   let uids = unionSEnv' ids ids'
-  modify (\s -> s {to_core_ids = uids})
+  let uexprs = unionSEnv' exprs exprs'
+  modify (\s -> s {to_core_ids = uids, to_core_exprs = uexprs})
   tc
 
 liftCG :: CG a -> ToCore a
@@ -254,6 +260,7 @@ singleConstraint fixSubC cgi
 defaultToCoreState :: CGInfo -> ToCoreState
 defaultToCoreState cgi
   = ToCoreState { to_core_ids       = mempty
+                , to_core_exprs     = mempty
                 , to_core_expr_sort = mempty
                 , to_core_tl_var    = Nothing
                 , to_core_cginfo  = cgi
@@ -270,13 +277,18 @@ defaultToCoreInfo cgi
                  cge = evalState (initEnv $ ghcI cgi) cgi
 
 initSpecs :: CGInfo -> REnv
-initSpecs cgi = fromListREnv globals locals
+initSpecs cgi = addTopMain $ fromListREnv globals locals
   where
     globals = renvs reGlobal
     locals = renvs reLocal
     renvs f = concat $ fmap (cgiToSpecs f) [renv, grtys]
     toMaps f g = fmap (f . g . senv) . hsCs
     cgiToSpecs f g = concat $ M.toList <$> toMaps f g cgi
+
+addTopMain :: REnv -> REnv
+addTopMain renv = case lookupREnv (symbol "Main.main") renv of
+  Nothing -> renv
+  Just spec -> insertREnv (symbol ":Main.main") spec renv
 
 -- getSpecs :: CGInfo -> [(Symbol, SpecType)]
 -- getSpecs cg = concat $ localSpecs ++ globalSpecs
@@ -294,6 +306,9 @@ lookupSType x = do
     Just spec -> pure spec
 
 
+instance Show REnv where
+  show (REnv g l) = unlines ["REnv", "ReGlobal", show g, "ReLocal", show l]
+
 insertSymSort :: Symbolic a => a -> Sort -> ToCore ()
 insertSymSort name idx
   = modify (\s -> s {to_core_expr_sort =
@@ -309,7 +324,12 @@ insertLocalId name idx
                      insertSEnv (symbol name) idx (to_core_ids s)})
 
 lookupLocalId :: Symbolic a => a -> ToCore (Maybe Id)
-lookupLocalId name = gets (\s -> lookupSEnv (symbol name) $ to_core_ids s)
+lookupLocalId name =
+  gets (\s -> lookupSEnv (symbol name) $ to_core_ids s)
+
+lookupLocalExpr :: Symbolic a => a -> ToCore (Maybe CoreExpr)
+lookupLocalExpr name =
+  gets (\s -> lookupSEnv (symbol name) $ to_core_exprs s)
 
 tyconFTycon :: FTycon -> ToCore (Maybe TyCon)
 tyconFTycon tc = asks (\s -> M.lookup tc $ to_core_ftycons s)
@@ -432,3 +452,12 @@ instance HasGradual a => HasGradual (Located a) where
   gVars = gVars . val
   ungrad l = l { val = ungrad (val l) }
 
+
+printEnv :: ToCore ()
+printEnv = do
+  ids <- gets to_core_ids
+  exprs <- gets to_core_exprs
+  printMsg "IDS"
+  printMsg $ show ids
+  printMsg "Expr"
+  printMsg $ show (fmap fst . toListSEnv $ exprs)

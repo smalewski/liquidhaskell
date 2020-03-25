@@ -11,6 +11,7 @@ extra-deps:
 - intern-0.9.1.4
 - located-base-0.1.1.1
 
+
 flags:
   liquidhaskell:
     devel: true

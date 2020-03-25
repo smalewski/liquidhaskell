@@ -103,6 +103,7 @@ executable gradualdyn
                , liquidhaskell
                , hpc >= 0.6
                , hscolour
+               , filepath
 
 executable gradual
   default-language: Haskell2010
@@ -300,7 +301,13 @@ Library
                     Gradual.CastInsertion,
                     Gradual.CastInsertion.Casting,
                     Gradual.CastInsertion.ExprToCore,
-                    Gradual.CastInsertion.Monad
+                    Gradual.CastInsertion.Monad,
+                    Gradual.Interface.GHCMain,
+                    Gradual.Interface.GhcMake,
+                    Gradual.Interface.HscMain,
+                    Gradual.Interface.Interface,
+                    Gradual.Interface.DriverPipeline,
+                    Gradual.Interface.RemoteTypes
 
    ghc-options: -W -fwarn-missing-signatures
    if flag(include)
